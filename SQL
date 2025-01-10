@@ -1,0 +1,385 @@
+-- Custom transformation with user-defined function 
+
+CREATE OR REPLACE FUNCTION calculate_annualized_earnings( 
+
+rental_rate NUMERIC, 
+
+rental_duration SMALLINT, 
+
+standard_period INTEGER DEFAULT 365 
+
+) RETURNS NUMERIC AS $$ 
+
+BEGIN -- Ensures rental_duration is valid 
+
+IF rental_duration <= 0 THEN 
+
+RAISE EXCEPTION 'Invalid rental duration %', rental duration; 
+
+END IF;	 
+
+ 
+
+-- Calculate potential rentals within year 
+
+RETURN (standard_period / rental_duration) * rental_rate; 
+
+END; 
+
+$$ LANGUAGE plpgsql; 
+
+  
+
+-- Detail table creation  
+
+  
+
+DROP TABLE IF EXISTS detailed_film_rentals; 
+
+  
+
+CREATE TABLE detailed_film_rentals (  
+
+  
+
+    film_id SERIAL PRIMARY KEY,           -- Unique identifier for the film  
+
+  
+
+    film_title VARCHAR(255) NOT NULL,     -- Title of the film  
+
+  
+
+    rental_rate NUMERIC(5, 2) NOT NULL,   -- Rental rate for the film  
+
+  
+
+    rental_duration INTEGER NOT NULL,     -- Rental duration in days  
+
+  
+
+    actual_rentals INTEGER NOT NULL,      -- Number of actual rentals  
+
+  
+
+    actual_earnings NUMERIC(10, 2),       -- Total earnings from actual rentals  
+
+  
+
+    annualized_earnings NUMERIC(10, 2)    -- Potential annualized earnings based on rental duration  
+
+  
+
+);  
+
+  
+
+--Summary table creation   
+
+  
+
+DROP TABLE IF EXISTS summary_film_rentals; 
+
+  
+
+CREATE TABLE summary_film_rentals (  
+
+  
+
+    film_title VARCHAR(255) NOT NULL,     -- Title of the film  
+
+  
+
+    rental_rate NUMERIC(5, 2) NOT NULL,   -- Rental rate for the film  
+
+  
+
+    total_rentals INTEGER NOT NULL,       -- Total rentals across all time  
+
+  
+
+    total_earnings NUMERIC(10, 2),        -- Total earnings across all rentals  
+
+  
+
+    rank_by_rentals INTEGER,              -- Rank of the film by number of rentals  
+
+  
+
+    rank_by_earnings INTEGER              -- Rank of the film by total earnings  
+
+  
+
+);  
+
+  
+
+-- Insert data into existing detailed_film_rentals table  
+
+  
+
+WITH detailed_data AS (  
+
+  
+
+    SELECT   
+
+  
+
+        f.film_id,  
+
+  
+
+        f.title AS film_title,  
+
+  
+
+        f.rental_rate,  
+
+  
+
+        f.rental_duration,  
+
+  
+
+        COUNT(r.rental_id) AS actual_rentals, -- Actual rentals from the database  
+
+  
+
+        COALESCE(SUM(f.rental_rate * f.rental_duration), 0) AS actual_earnings, -- Actual earnings, defaulting to 0 for films with no rentals  
+
+  
+
+        calculate_annualized_earnings(f.rental_rate, f.rental_duration) AS annualized_earnings  
+
+  
+
+    FROM   
+
+  
+
+        film f  
+
+  
+
+    LEFT JOIN   
+
+  
+
+        inventory i ON f.film_id = i.film_id  
+
+  
+
+    LEFT JOIN   
+
+  
+
+        rental r ON i.inventory_id = r.inventory_id  
+
+  
+
+    GROUP BY   
+
+  
+
+        f.film_id, f.title, f.rental_rate, f.rental_duration  
+
+  
+
+)  
+
+  
+
+-- Insert data into detailed_film_rentals  
+
+  
+
+INSERT INTO detailed_film_rentals (film_id, film_title, rental_rate, rental_duration, actual_rentals, actual_earnings, annualized_earnings)  
+
+  
+
+SELECT   
+
+  
+
+    film_id,  
+
+  
+
+    film_title,  
+
+  
+
+    rental_rate,  
+
+  
+
+    rental_duration,  
+
+  
+
+    actual_rentals,  
+
+  
+
+    actual_earnings,  
+
+  
+
+    annualized_earnings  
+
+  
+
+FROM detailed_data;  
+
+  
+
+  
+
+  
+
+-- Insert into summary_film_rentals  
+
+  
+
+WITH summary_data AS (  
+
+  
+
+    SELECT   
+
+  
+
+        f.title AS film_title,  
+
+  
+
+        f.rental_rate,  
+
+  
+
+        COUNT(r.rental_id) AS total_rentals, -- Total rentals  
+
+  
+
+        COALESCE(SUM(f.rental_rate * f.rental_duration), 0) AS total_earnings -- Total earnings  
+
+  
+
+    FROM   
+
+  
+
+        film f  
+
+  
+
+    LEFT JOIN   
+
+  
+
+        inventory i ON f.film_id = i.film_id  
+
+  
+
+    LEFT JOIN   
+
+  
+
+        rental r ON i.inventory_id = r.inventory_id  
+
+  
+
+    GROUP BY   
+
+  
+
+        f.film_id, f.title, f.rental_rate  
+
+  
+
+),  
+
+  
+
+ranked_data AS (  
+
+  
+
+    SELECT   
+
+  
+
+        film_title,  
+
+  
+
+        rental_rate,  
+
+  
+
+        total_rentals,  
+
+  
+
+        total_earnings,  
+
+  
+
+        RANK() OVER (ORDER BY total_rentals DESC) AS rank_by_rentals,  
+
+  
+
+        RANK() OVER (ORDER BY total_earnings DESC) AS rank_by_earnings  
+
+  
+
+    FROM summary_data  
+
+  
+
+)  
+
+  
+
+-- Insert data into summary_film_rentals  
+
+  
+
+INSERT INTO summary_film_rentals (film_title, rental_rate, total_rentals, total_earnings, rank_by_rentals, rank_by_earnings)  
+
+  
+
+SELECT   
+
+  
+
+    film_title,  
+
+  
+
+    rental_rate,  
+
+  
+
+    total_rentals,  
+
+  
+
+    total_earnings,  
+
+  
+
+    rank_by_rentals,  
+
+  
+
+    rank_by_earnings  
+
+  
+
+FROM ranked_data;  
+
+  
+
+SELECT * FROM detailed_film_rentals 
